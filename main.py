@@ -5,8 +5,8 @@ import random as rand
 from math import *
 
 # Open the image file
-image = Image.open('image-small.png')
-depth = Image.open('depthmap-small.png')
+image = Image.open('images/image-small.png')
+depth = Image.open('images/depthmap-small.png')
 
 # Convert the image to a NumPy array
 imageArray = np.array(image)
