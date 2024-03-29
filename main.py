@@ -5,8 +5,8 @@ import random as rand
 from math import *
 
 # Open the image file
-image = Image.open('images/image-small.png')
-depth = Image.open('images/depthmap-small.png')
+image = Image.open('images/image-2.png')
+depth = Image.open('images/depthmap-2.png')
 
 # Convert the image to a NumPy array
 imageArray = np.array(image)
@@ -41,7 +41,7 @@ def generateKernel(size, x, y):
 
 
 def returnKernelAverage(x, y):
-    size = int(depthArray[x][y][0] / 70) + 1
+    size = int(depthArray[x][y][0] / 30) + 1
     kernel = generateKernel(size = size, x=x, y=y)
     weightedAverage = [0,0,0,255]
     for rowNum, row in enumerate(kernel):
