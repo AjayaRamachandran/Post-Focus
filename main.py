@@ -3,10 +3,20 @@ from PIL import Image
 import numpy as np
 import random as rand
 from math import *
+import pygame
+
+pygame.init()
+width = 200
+height = 200
+windowSize = (width, height)
+
+pygame.display.set_caption("Post-Focus") # Sets title of window
+screen = pygame.display.set_mode(windowSize) # Sets the dimensions of the window to the windowSize
+fps = 60
 
 # Open the image file
-image = Image.open('images/image-2.png')
-depth = Image.open('images/depthmap-2.png')
+image = Image.open('images/image-small.png')
+depth = Image.open('images/depthmap-small.png')
 
 # Convert the image to a NumPy array
 imageArray = np.array(image)
@@ -62,6 +72,7 @@ for rowNum, row in enumerate(imageArray): # marches downward
             #imageArray[rowNum][pixelNum][channel] = imageArray[rowNum][pixelNum][channel] * scalar
             imageArray[rowNum][pixelNum] = returnKernelAverage(rowNum, pixelNum)
             #print("pixel calculated.")
+    print("Row " + str(rowNum) + " completed")
 
 newImage = Image.fromarray((imageArray))
 newImage.save("output.png")
