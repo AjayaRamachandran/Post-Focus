@@ -3,10 +3,11 @@ from PIL import Image
 import numpy as np
 import random as rand
 from math import *
+import sys
 
 # Open the image file
-image = Image.open('images/image-2.png')
-depth = Image.open('images/depthmap-2.png')
+image = Image.open('images/image.png')
+depth = Image.open('images/depthmap.png')
 
 # Convert the image to a NumPy array
 imageArray = np.array(image)
@@ -41,7 +42,7 @@ def generateKernel(size, x, y):
 
 
 def returnKernelAverage(x, y):
-    size = int(depthArray[x][y][0] / 30) + 1
+    size = int(depthArray[x][y][0] / 100) + 1
     kernel = generateKernel(size = size, x=x, y=y)
     weightedAverage = [0,0,0,255]
     for rowNum, row in enumerate(kernel):
@@ -51,6 +52,14 @@ def returnKernelAverage(x, y):
                 weightedAverage[channel] = weightedAverage[channel] + kernel[pixelNum][rowNum] * imageArray[imageX][imageY][channel]
     return weightedAverage
 
+def print_progress_bar(iteration, total, length=50):
+    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
+    filled_length = int(length * iteration // total)
+    bar = '█' * filled_length + '-' * (length - filled_length)
+    sys.stdout.write(f'\rProgress: |{bar}| {percent}% Complete')
+    sys.stdout.flush()  # Force the system to print the update immediately
+    if iteration == total:
+        print()  # Move to a new line after completion
 
 ###### MAIN ######
 
@@ -62,6 +71,7 @@ for rowNum, row in enumerate(imageArray): # marches downward
             #imageArray[rowNum][pixelNum][channel] = imageArray[rowNum][pixelNum][channel] * scalar
             imageArray[rowNum][pixelNum] = returnKernelAverage(rowNum, pixelNum)
             #print("pixel calculated.")
+    print_progress_bar(rowNum + 1, len(imageArray))
 
 newImage = Image.fromarray((imageArray))
 newImage.save("output.png")
