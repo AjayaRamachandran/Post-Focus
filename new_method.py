@@ -6,6 +6,8 @@ Given an input image, this script:
   3. For every depth slice i in [0, DEPTH_COUNT) it writes:
         {i}_alpha.png   - white where the slice is, black elsewhere
         {i}_masked.png  - the source image kept only inside the slice
+        {i}_blurred.png - lens-blurred {i}_masked (premultiplied colour, before
+                          dividing by blurred alpha / unmult)
         {i}_unmult.png  - lens-blurred {i}_masked / lens-blurred {i}_alpha
                           (0/0 := 0), which "unpremultiplies" the slice so all
                           non-zero values are restored to full brightness.
@@ -24,7 +26,7 @@ import numpy as np
 
 # ----- Configuration ---------------------------------------------------------
 
-INPUT_IMAGE = "images/maithili.jpg"
+INPUT_IMAGE = "images/lego_flowers.jpeg"
 TEMP_DIR = "./temp-images"
 BLUR_STRENGTH = 0.4
 DEPTH_COUNT = 8        # number of depth slices to bracket the depth map into
@@ -417,6 +419,10 @@ def main() -> None:
         # Lens-blur both, then unpremultiply: blurred_color / blurred_alpha.
         blurred_masked = lens_blur(masked_f, radius)
         blurred_alpha = lens_blur(mask_f, radius)
+        cv2.imwrite(
+            os.path.join(TEMP_DIR, f"{i}_blurred.png"),
+            np.clip(blurred_masked, 0.0, 255.0).astype(np.uint8),
+        )
 
         # If both numerator and denominator are essentially zero (i.e. the
         # only "value" present is float / convolution residue), the divide is
@@ -480,7 +486,7 @@ def main() -> None:
         np.clip(canvas, 0.0, 255.0).astype(np.uint8),
     )
 
-    print(f"Done. Wrote {DEPTH_COUNT * 5 + 2} files to {TEMP_DIR}")
+    print(f"Done. Wrote {DEPTH_COUNT * 6 + 2} files to {TEMP_DIR}")
 
 
 if __name__ == "__main__":
