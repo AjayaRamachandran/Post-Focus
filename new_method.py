@@ -166,6 +166,32 @@ def expand_highlights(image_f: np.ndarray, strength: float = 1.0) -> np.ndarray:
     return strength * (HIGHLIGHT_NUMERATOR / (image_f - HIGHLIGHT_OFFSET)) + image_f
 
 
+# Highlight rolloff. As a pixel's brightest channel approaches 255, all of its
+# channels are blended toward white, so boosted highlights bloom into white
+# bokeh instead of ever-more-saturated colour (the way film / sensors clip):
+#
+#     w = MAX_WHITE_BLEND * strength * (max(r, g, b) / 255) ^ ROLLOFF_POWER
+#     channel' = channel * (1 - w) + 255 * w
+#
+# MAX_WHITE_BLEND caps w, so even a fully clipped pixel on the most-blurred
+# slice keeps (1 - MAX_WHITE_BLEND) of its true colour.
+#
+# Applied in 8-bit space *before* expand_highlights, so the whitened pixel is
+# what gets pushed into HDR. strength is tied to the slice's blur radius, so
+# in-focus / lightly blurred slices keep the source colours.
+ROLLOFF_POWER = 8.0     # higher = only the very brightest pixels roll off
+MAX_WHITE_BLEND = 0.9   # most white that can ever be mixed in (0 - 1)
+
+
+def rolloff_highlights(image_f: np.ndarray, strength: float) -> np.ndarray:
+    """Blend near-clipping pixels toward white, scaled by `strength` in [0, 1]."""
+    if strength <= 0.0:
+        return image_f
+    max_channel = np.clip(image_f.max(axis=-1, keepdims=True), 0.0, 255.0)
+    white_weight = MAX_WHITE_BLEND * strength * (max_channel / 255.0) ** ROLLOFF_POWER
+    return image_f * (1.0 - white_weight) + 255.0 * white_weight
+
+
 # ----- Radial swirl warp (divergence / convergence) --------------------------
 
 # These two curves are exact inverses of each other (f(g(x)) = g(f(x)) = x):
@@ -299,6 +325,32 @@ def lens_blur(image: np.ndarray, radius: int) -> np.ndarray:
 
 # ----- Main pipeline ---------------------------------------------------------
 
+def slice_blur_radii(bin_edges: np.ndarray) -> list[int]:
+    """Lens blur radius for every depth slice (0 for in-focus slices).
+
+    Bokeh slices interpolate linearly between MIN_BLUR_RADIUS and
+    MAX_BLUR_RADIUS based on mid-depth (brighter == closer in MiDaS, so closer
+    slices get smaller radii).
+    """
+    focus_threshold = DEPTH_COUNT - IN_FOCUS_LAYERS
+
+    radii = []
+    for i in range(DEPTH_COUNT):
+        if i >= focus_threshold:
+            radii.append(0)
+            continue
+        # Shift the blur curve back so the in-focus group "absorbs" the
+        # closest IN_FOCUS_LAYERS - 1 slots. The nearest unfocused layer then
+        # receives the blur that the second-closest layer would have received
+        # in the original (IN_FOCUS_LAYERS = 1) scheme, the next one back gets
+        # the third-closest layer's blur, and so on.
+        effective_i = min(i + (IN_FOCUS_LAYERS - 1), DEPTH_COUNT - 1)
+        closeness = (bin_edges[effective_i] + bin_edges[effective_i + 1]) * 0.5 / 255.0
+        radius = (MIN_BLUR_RADIUS + (MAX_BLUR_RADIUS - MIN_BLUR_RADIUS) * (1.0 - closeness)) * BLUR_STRENGTH
+        radii.append(max(int(round(radius)), 0))
+    return radii
+
+
 def main() -> None:
     os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -355,6 +407,8 @@ def main() -> None:
 
     # Slices with index >= focus_threshold are in focus (radius 0, no boost).
     focus_threshold = DEPTH_COUNT - IN_FOCUS_LAYERS
+    radii = slice_blur_radii(bin_edges)
+    max_radius = max(max(radii), 1)
 
     # Final composite canvas. We composite back-to-front: in our depth
     # convention (MiDaS: brighter == closer), slice 0 is the farthest layer
@@ -365,27 +419,15 @@ def main() -> None:
     for i in range(DEPTH_COUNT):
         lo, hi = bin_edges[i], bin_edges[i + 1]
 
-        # In-focus slices: force radius to 0 (the highlight boost is still
-        # applied at MIN_HIGHLIGHT_STRENGTH so there's no hard discontinuity).
-        # Bokeh slices: interpolate radius based on mid-depth (brighter ==
-        # closer in MiDaS, so closer slices get smaller radii).
+        # In-focus slices have radius 0 (the highlight boost is still applied
+        # at MIN_HIGHLIGHT_STRENGTH so there's no hard discontinuity).
         in_focus = i >= focus_threshold
-        if in_focus:
-            radius = 0
-        else:
-            # Shift the blur curve back so the in-focus group "absorbs" the
-            # closest IN_FOCUS_LAYERS - 1 slots. The nearest unfocused layer
-            # then receives the blur that the second-closest layer would have
-            # received in the original (IN_FOCUS_LAYERS = 1) scheme, the next
-            # one back gets the third-closest layer's blur, and so on.
-            effective_i = min(i + (IN_FOCUS_LAYERS - 1), DEPTH_COUNT - 1)
-            lo_eff, hi_eff = bin_edges[effective_i], bin_edges[effective_i + 1]
-            closeness = (lo_eff + hi_eff) * 0.5 / 255.0
-            radius = int(round(
-                (MIN_BLUR_RADIUS
-                 + (MAX_BLUR_RADIUS - MIN_BLUR_RADIUS) * (1.0 - closeness)) / (1 / BLUR_STRENGTH)
-            ))
-            radius = max(radius, 0)
+        radius = radii[i]
+
+        # Rolloff scales with how blurred this slice is: the most-blurred
+        # slice gets the full rolloff (still capped by MAX_WHITE_BLEND),
+        # in-focus slices get none and keep the source colours.
+        rolloff_strength = radius / max_radius
 
         # Highlight bleed strength ramps linearly from MAX (farthest, i = 0)
         # to MIN (closest, i = DEPTH_COUNT - 1). All slices -- including
@@ -396,7 +438,8 @@ def main() -> None:
             MAX_HIGHLIGHT_STRENGTH
             + (MIN_HIGHLIGHT_STRENGTH - MAX_HIGHLIGHT_STRENGTH) * depth_t
         )
-        slice_source_f = expand_highlights(image_orig_f, highlight_strength)
+        slice_source_f = rolloff_highlights(image_orig_f, rolloff_strength)
+        slice_source_f = expand_highlights(slice_source_f, highlight_strength)
 
         # Build the alpha matte for this slice. Make the last bin inclusive on
         # the high end so depth==255 isn't dropped.
@@ -470,7 +513,8 @@ def main() -> None:
         tag = " (in focus)" if in_focus else ""
         print(
             f"  slice {i + 1}/{DEPTH_COUNT}: depth in [{lo:.0f}, {hi:.0f}) "
-            f"-> blur radius {radius}px, highlight {highlight_strength:.2f}{tag}"
+            f"-> blur radius {radius}px, highlight {highlight_strength:.2f}, "
+            f"rolloff {rolloff_strength:.2f}{tag}"
         )
 
     # Undo the divergence warp. This is exact in the analytic sense (g is the
